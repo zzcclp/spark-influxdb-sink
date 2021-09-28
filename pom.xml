@@ -19,16 +19,28 @@
   <modelVersion>4.0.0</modelVersion>
 
   <groupId>io.kyligence</groupId>
-  <artifactId>spark-influxdb-sink_2.11</artifactId>
-  <version>1.0.0</version>
+  <artifactId>spark-influxdb-sink</artifactId>
+  <version>1.1.0</version>
   <packaging>jar</packaging>
   <name>Spark Influxdb Sink</name>
 
   <properties>
     <encoding>UTF-8</encoding>
     <scala.binary.version>2.11</scala.binary.version>
-    <spark.version>2.4.1-kylin-r74</spark.version>
+    <!-- <spark.version>2.4.1-kylin-r74</spark.version> -->
+    <spark.version>2.4.8</spark.version>
   </properties>
+
+  <profiles>
+    <profile>
+      <id>spark-3.1</id>
+      <properties>
+        <scala.binary.version>2.12</scala.binary.version>
+        <!-- <spark.version>3.1.1-kylin-4.x-r33</spark.version> -->
+        <spark.version>3.1.1</spark.version>
+      </properties>
+    </profile>
+  </profiles>
 
   <dependencies>
     <dependency>
@@ -109,7 +121,7 @@
             </goals>
             <configuration>
               <!-- <checkMultipleScalaVersions>false</checkMultipleScalaVersions> -->
-              <scalaCompatVersion>2.11</scalaCompatVersion>
+              <scalaCompatVersion>${scala.binary.version}</scalaCompatVersion>
             </configuration>
           </execution>
           <execution>
@@ -165,10 +177,6 @@
                 <relocation>
                   <pattern>org.tukaani</pattern>
                   <shadedPattern>kylin_sis_shaded.org.tukaani</shadedPattern>
-                </relocation>
-                <relocation>
-                  <pattern>org.slf4j</pattern>
-                  <shadedPattern>kylin_sis_shaded.org.slf4j</shadedPattern>
                 </relocation>
                 <relocation>
                   <pattern>net.logstash</pattern>

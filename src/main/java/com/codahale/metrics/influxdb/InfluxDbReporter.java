@@ -33,7 +33,6 @@ import org.influxdb.dto.Point;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.net.ConnectException;
 import java.nio.charset.Charset;
 import java.util.HashMap;
 import java.util.Locale;
@@ -109,7 +108,7 @@ public class InfluxDbReporter extends ScheduledReporter {
     private final InfluxDB influxDB;
     private final String dataBase;
 
-    private final String profilerName = "DAGScheduler";
+    private final String profilerNamePrefix = "SparkMetrics";
 
     private InfluxDbReporter(MetricRegistry registry,
                              InfluxDB influxDB,
@@ -134,31 +133,146 @@ public class InfluxDbReporter extends ScheduledReporter {
         final long now = System.currentTimeMillis();
 
         try {
-            Map<String, Map<String, Gauge>> groupedGauges = groupGauges(gauges);
-            for (Map.Entry<String, Map<String, Gauge>> entry : groupedGauges.entrySet()) {
-                reportGaugeGroup(entry.getKey(), entry.getValue(), now);
-            }
-            this.influxDB.flush();
+            // BatchPoints
+            BatchPoints batchPoints = BatchPoints.database(this.dataBase)
+                    .consistency(InfluxDB.ConsistencyLevel.ONE)
+                    .retentionPolicy("autogen")
+                    .build();
 
-            // TODO : support to reporter these types of data
-            /* for (Map.Entry<String, Counter> entry : counters.entrySet()) {
-                reportCounter(timestamp, entry.getKey(), entry.getValue());
+            /* Map<String, Map<String, Gauge>> groupedGauges = groupGauges(gauges);
+            for (Map.Entry<String, Map<String, Gauge>> entry : groupedGauges.entrySet()) {
+                reportGaugeGroup(entry.getKey(), entry.getValue(), now, batchPoints);
+            } */
+            for (Map.Entry<String, Gauge> entry : gauges.entrySet()) {
+                reportGauge(entry.getKey(), entry.getValue(), now, batchPoints);
+            }
+
+            for (Map.Entry<String, Counter> entry : counters.entrySet()) {
+                reportCounter(entry.getKey(), entry.getValue(), now, batchPoints);
             }
 
             for (Map.Entry<String, Histogram> entry : histograms.entrySet()) {
-                reportHistogram(timestamp, entry.getKey(), entry.getValue());
+                reportHistogram(entry.getKey(), entry.getValue(), now, batchPoints);
             }
 
             for (Map.Entry<String, Meter> entry : meters.entrySet()) {
-                reportMeter(timestamp, entry.getKey(), entry.getValue());
+                reportMeter(entry.getKey(), entry.getValue(), now, batchPoints);
             }
 
             for (Map.Entry<String, Timer> entry : timers.entrySet()) {
-                reportTimer(timestamp, entry.getKey(), entry.getValue());
-            } */
+                reportTimer(entry.getKey(), entry.getValue(), now, batchPoints);
+            }
+
+            // Write
+            this.influxDB.write(batchPoints);
         } catch (Exception e) {
             LOGGER.warn("Unable to report to InfluxDB with error '{}'. Discarding data.", e.getMessage());
         }
+    }
+
+    private void reportGauge(String name, Gauge gauge, long now, BatchPoints batchPoints) {
+        Map<String, Object> fields = new HashMap<String, Object>();
+        Object gaugeValue = sanitizeGauge(gauge.getValue());
+        fields.put("value", gaugeValue);
+
+        // Point
+        Point point = Point.measurement(profilerNamePrefix + "-Gauge")
+                .time(now, TimeUnit.MILLISECONDS)
+                .fields(fields)
+                .tag("metricsTag", name)
+                .build();
+
+        batchPoints.point(point);
+    }
+
+    private void reportCounter(String name, Counter counter, long now, BatchPoints batchPoints) {
+        Map<String, Object> fields = new HashMap<String, Object>();
+        fields.put("count", counter.getCount());
+
+        // Point
+        Point point = Point.measurement(profilerNamePrefix + "-Counter")
+                .time(now, TimeUnit.MILLISECONDS)
+                .fields(fields)
+                .tag("metricsTag", name)
+                .build();
+
+        batchPoints.point(point);
+    }
+
+    private void reportHistogram(String name, Histogram histogram,
+                                 long now, BatchPoints batchPoints) {
+        final Snapshot snapshot = histogram.getSnapshot();
+        Map<String, Object> fields = new HashMap<String, Object>();
+        fields.put("count", histogram.getCount());
+        fields.put("min", snapshot.getMin());
+        fields.put("max", snapshot.getMax());
+        fields.put("mean", snapshot.getMean());
+        fields.put("stddev", snapshot.getStdDev());
+        fields.put("p50", snapshot.getMedian());
+        fields.put("p75", snapshot.get75thPercentile());
+        fields.put("p95", snapshot.get95thPercentile());
+        fields.put("p98", snapshot.get98thPercentile());
+        fields.put("p99", snapshot.get99thPercentile());
+        fields.put("p999", snapshot.get999thPercentile());
+
+        // Point
+        Point point = Point.measurement(profilerNamePrefix + "-Histogram")
+                .time(now, TimeUnit.MILLISECONDS)
+                .fields(fields)
+                .tag("metricsTag", name)
+                .build();
+
+        batchPoints.point(point);
+    }
+
+    private void reportMeter(String name, Meter meter, long now, BatchPoints batchPoints) {
+        Map<String, Object> fields = new HashMap<String, Object>();
+        fields.put("count", meter.getCount());
+        fields.put("mean_rate", convertRate(meter.getMeanRate()));
+        fields.put("m1_rate", convertRate(meter.getOneMinuteRate()));
+        fields.put("m5_rate", convertRate(meter.getFiveMinuteRate()));
+        fields.put("m15_rate", convertRate(meter.getFifteenMinuteRate()));
+        fields.put("rate_unit", "events/" + getRateUnit());
+
+        // Point
+        Point point = Point.measurement(profilerNamePrefix + "-Meter")
+                .time(now, TimeUnit.MILLISECONDS)
+                .fields(fields)
+                .tag("metricsTag", name)
+                .build();
+
+        batchPoints.point(point);
+    }
+
+    private void reportTimer(String name, Timer timer, long now, BatchPoints batchPoints) {
+        final Snapshot snapshot = timer.getSnapshot();
+        Map<String, Object> fields = new HashMap<String, Object>();
+        fields.put("count", timer.getCount());
+        fields.put("min", convertDuration(snapshot.getMin()));
+        fields.put("max", convertDuration(snapshot.getMax()));
+        fields.put("mean", convertDuration(snapshot.getMean()));
+        fields.put("stddev", convertDuration(snapshot.getStdDev()));
+        fields.put("p50", convertDuration(snapshot.getMedian()));
+        fields.put("p75", convertDuration(snapshot.get75thPercentile()));
+        fields.put("p95", convertDuration(snapshot.get95thPercentile()));
+        fields.put("p98", convertDuration(snapshot.get98thPercentile()));
+        fields.put("p99", convertDuration(snapshot.get99thPercentile()));
+        fields.put("p999", convertDuration(snapshot.get999thPercentile()));
+        fields.put("mean_rate", convertRate(timer.getMeanRate()));
+        fields.put("m1_rate", convertRate(timer.getOneMinuteRate()));
+        fields.put("m5_rate", convertRate(timer.getFiveMinuteRate()));
+        fields.put("m15_rate", convertRate(timer.getFifteenMinuteRate()));
+        fields.put("rate_unit", "calls/" + getRateUnit());
+        fields.put("duration_unit", getDurationUnit());
+
+        // Point
+        Point point = Point.measurement(profilerNamePrefix + "-Timer")
+                .time(now, TimeUnit.MILLISECONDS)
+                .fields(fields)
+                .tag("metricsTag", name)
+                .build();
+
+        batchPoints.point(point);
     }
 
     private Map<String, Map<String, Gauge>> groupGauges(SortedMap<String, Gauge> gauges) {
@@ -201,7 +315,8 @@ public class InfluxDbReporter extends ScheduledReporter {
         return finalValue;
     }
 
-    private void reportGaugeGroup(String name, Map<String, Gauge> gaugeGroup, long now) {
+    private void reportGaugeGroup(String name, Map<String, Gauge> gaugeGroup, long now,
+                                  BatchPoints batchPoints) {
         Map<String, Object> fields = new HashMap<String, Object>();
         for (Map.Entry<String, Gauge> entry : gaugeGroup.entrySet()) {
             Object gaugeValue = sanitizeGauge(entry.getValue().getValue());
@@ -211,19 +326,13 @@ public class InfluxDbReporter extends ScheduledReporter {
         }
 
         // Point
-        Point point = Point.measurement(profilerName)
+        Point point = Point.measurement(profilerNamePrefix)
                 .time(now, TimeUnit.MILLISECONDS)
                 .fields(fields)
                 .tag("metricsTag", name)
                 .build();
-        // BatchPoints
-        BatchPoints batchPoints = BatchPoints.database(this.dataBase)
-                .consistency(InfluxDB.ConsistencyLevel.ALL)
-                .retentionPolicy("autogen")
-                .build();
+
         batchPoints.point(point);
-        // Write
-        this.influxDB.write(batchPoints);
     }
 
     protected String sanitize(String name) {

@@ -19,11 +19,10 @@ package org.apache.spark.metrics.sink
 
 import java.util.{Locale, Properties}
 import java.util.concurrent.TimeUnit
-
 import com.codahale.metrics.MetricRegistry
 import com.codahale.metrics.influxdb.InfluxDbReporter
-import org.influxdb.InfluxDBFactory
-
+import okhttp3.OkHttpClient
+import org.influxdb.{InfluxDB, InfluxDBFactory}
 import org.apache.spark.SecurityManager
 import org.apache.spark.metrics.MetricsSystem
 
@@ -66,7 +65,15 @@ class InfluxdbSink(val property: Properties, val registry: MetricRegistry,
   MetricsSystem.checkMinimalPollingPeriod(pollUnit, pollPeriod)
 
   val url: String = "http://" + host + ":" + port
-  val influxDB = InfluxDBFactory.connect(url, userName, password)
+  val client = (new OkHttpClient.Builder())
+    .connectTimeout(1, TimeUnit.MINUTES)
+    .readTimeout(1, TimeUnit.MINUTES)
+    .writeTimeout(1, TimeUnit.MINUTES)
+    .retryOnConnectionFailure(true)
+  val influxDB = InfluxDBFactory.connect(url, userName, password, client)
+    .enableBatch(100, 1000, TimeUnit.MILLISECONDS)
+    .enableGzip()
+    .setLogLevel(InfluxDB.LogLevel.NONE)
   val reporter: InfluxDbReporter = InfluxDbReporter.forRegistry(registry)
       .convertDurationsTo(TimeUnit.MILLISECONDS)
       .convertRatesTo(TimeUnit.SECONDS)
