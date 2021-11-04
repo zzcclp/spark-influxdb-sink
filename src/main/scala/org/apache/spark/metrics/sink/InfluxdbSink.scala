@@ -27,8 +27,13 @@ import org.apache.spark.SecurityManager
 import org.apache.spark.metrics.MetricsSystem
 
 
-class InfluxdbSink(val property: Properties, val registry: MetricRegistry,
-                   securityMgr: SecurityManager) extends Sink {
+class InfluxdbSink(val property: Properties, val registry: MetricRegistry) extends Sink {
+
+  def this(property: Properties, registry: MetricRegistry,
+  securityMgr: SecurityManager) {
+    this(property, registry)
+  }
+
   val INFLUXDB_KEY_PERIOD = "period"
   val INFLUXDB_DEFAULT_PERIOD = 10
 
